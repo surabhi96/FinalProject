@@ -10,16 +10,20 @@ if PY3:
     xrange = range
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
+from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Quaternion
 import rospy
 
 import numpy as np
 import cv2
 import imutils
-
-
+flag = 0
+velocity = Quaternion()
 bridge = CvBridge()
 mask_pub = rospy.Publisher('/mask', Image, queue_size=1)
+vel_pub = rospy.Publisher('/moveto_cmd_body', Quaternion, queue_size=1)
 def find_circles(my_img):
+    global flag 
     img = bridge.imgmsg_to_cv2(my_img, "bgr8")
     
     img_orig=cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
@@ -34,10 +38,6 @@ def find_circles(my_img):
 
     drawing = np.zeros((dilate.shape[0], dilate.shape[1], 3), np.uint8)
  
-    # # draw contours 
-    for i in range(len(cnts)):
-        color_contours = (255, 0, 255) 
-    
     cnt_area = []
     cnt_num = []
     for c in cnts:
@@ -48,7 +48,9 @@ def find_circles(my_img):
     # print(cnt_area)
     # large_cnts = np.zeros(np.shape(mask))
     fresh_im = np.zeros(np.shape(img_orig))
-
+    size_im = np.shape(img_orig)
+    y_im = size_im[0]
+    x_im = size_im[1]
     for i in range(5): # in the 5 largest contours, check if cnt_area > 5000
         if cnt_area[len(cnt_area)-1-i] > 1000:
 
@@ -59,7 +61,9 @@ def find_circles(my_img):
     detected_circles = cv2.HoughCircles(mask,  
                    cv2.HOUGH_GRADIENT, 1, 20, param1 = 50, 
                param2 = 30, minRadius = 1, maxRadius = 40) 
-  
+    
+    scale_x = 0.001
+    scale_y = 0.001
     # Draw circles that are detected. 
     if detected_circles is not None: 
   
@@ -68,19 +72,72 @@ def find_circles(my_img):
       
         for pt in detected_circles[0, :]: 
             a, b, r = pt[0], pt[1], pt[2] 
-      
+           
             # Draw the circumference of the circle. 
             cv2.circle(mask, (a, b), r, (0, 255, 0), 2) 
       
             # Draw a small circle (of radius 1) to show the center. 
-            cv2.circle(mask, (a, b), 1, (0, 0, 255), 3) 
+            cv2.circle(mask, (a, b), 1, (0, 0, 255), 3)
+
+            # first control in x dirn in image space (y in bebop space)
+            del_x = x_im-a # if +ve go left (+y direction bebop)
+            del_y = y_im-b
+            print("del_x")
+            print(del_x)
+            print("del_y")
+            print(del_y)
+            # if the error is greater than 20 pixels, then only change motion in y direction 
+
+            if abs(del_x)>20:
+                flag = 0
+                velocity.w = 1
+                velocity.x = 0
+                velocity.y = -del_x*scale_x
+                velocity.z = 0
+                print("y")
+            else:
+                flag = 1 
+                velocity.w = 0
+                velocity.x = 0
+                velocity.y = 0
+                velocity.z = 0
+                print("y done")
+            if flag == 1:
+                if abs(del_y)>20:   
+                    velocity.w = 1
+                    velocity.x = del_y*scale_y
+                    velocity.y = 0
+                    velocity.z = 0
+                    print("x")
+                else:
+                    flag = 2
+                    velocity.w = 0
+                    velocity.x = 0
+                    velocity.y = 0
+                    velocity.z = 0
+                    print("x done")
+            if flag == 2:
+                if abs(del_x) > 10 and abs(del_y)>10:
+
+                    velocity.w = 0
+                    velocity.x = del_y*scale_y
+                    velocity.y = -del_x*scale_x
+                    velocity.z = 0
+                    print("xy")
+                else:
+                    velocity.w = 0
+                    velocity.x = 0
+                    velocity.y = 0
+                    velocity.z = 0
+                    print("done")
+            break 
             # cv2.imshow("Detected Circle", mask) 
             # cv2.waitKey(0) 
-    mask_pub.publish(bridge.cv2_to_imgmsg(mask, "mono8")) 
-
+    # mask_pub.publish(bridge.cv2_to_imgmsg(mask, "mono8")) 
+    pub_vel.publish(velocity)
      
 def main():
-    rospy.init_node('bullseye_detection', anonymous=True)
+    rospy.init_node('bullseye_detection', anonymous=False)
     rospy.Subscriber('/duo3d/left/image_rect_throttle', Image, find_circles)
     rospy.spin()
     
